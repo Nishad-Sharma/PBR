@@ -8,13 +8,16 @@
 import Foundation
 import simd
 
-let sun = SphereLight(center: simd_float3(0, 10, 0), radius: 1.0, color: simd_float3(1, 1, 1), intensity: 1000.0)
-let camera = Camera(position: simd_float3(0, 0, 5), direction: simd_float3(0, 0, -1), horizontalFov: Double.pi / 4.0, resolution: simd_int2(800, 600))
+let sun = SphereLight(center: simd_float3(-50, 50, -20), radius: 10.0, color: simd_float3(1, 1, 1), intensity: 1000.0)
+let direction = simd_normalize(simd_float3(0, 0, 0) - simd_float3(13, 2, 3))
+let camera = Camera(position: simd_float3(13, 2, 3), direction: direction, horizontalFov: Double.pi / 4.0, resolution: simd_int2(800, 600))
 let spheres = [
-    Sphere(center: simd_float3(0, 0, 0), radius: 1.0, material: Material(color: simd_float3(1, 0, 0), metallic: 0.5, roughness: 0.1)),
-    Sphere(center: simd_float3(-2, 0, 0), radius: 1.0, material: Material(color: simd_float3(0, 1, 0), metallic: 0.5, roughness: 0.1)),
-    Sphere(center: simd_float3(1, 0, 0), radius: 1.0, material: Material(color: simd_float3(0, 0, 1), metallic: 0.5, roughness: 0.1))
+    Sphere(center: simd_float3(0, 1, 0), radius: 1.0, material: Material(color: simd_float3(1, 0, 0), metallic: 0.5, roughness: 0.1)),
+    Sphere(center: simd_float3(-4, 1, 0), radius: 1.0, material: Material(color: simd_float3(0, 1, 0), metallic: 0.5, roughness: 0.1)),
+    Sphere(center: simd_float3(4, 1, 0), radius: 1.0, material: Material(color: simd_float3(0, 0, 1), metallic: 0.5, roughness: 0.1)),
+    Sphere(center: simd_float3(0, -1000, 0), radius: 1000.0, material: Material(color: simd_float3(0.5, 0.5, 0.5), metallic: 0, roughness: 0.9))
 ]
+
 let scene = Scene(spheres: spheres, light: sun, camera: camera)
 scene.render()
 
@@ -22,7 +25,7 @@ class Scene {
     var spheres: [Sphere] = []
     var light: SphereLight
     var camera: Camera
-    var ambientLight: simd_float3 = simd_float3(0.1, 0.1, 0.1) // Ambient light color
+    var ambientLight: simd_float3 = simd_float3(0.53, 0.81, 0.92) // Ambient light color
 
     init(spheres: [Sphere], light: SphereLight, camera: Camera) {
         self.spheres = spheres
@@ -94,8 +97,8 @@ class Scene {
                       
                 case .hit(let point, let color):
                     // get distance between light and intersection 
-                    let distanceAttenuation = 1 / simd_length(point - light.center)
-
+                    // let distanceAttenuation = 1 / simd_length(point - light.center)
+                    let distanceAttenuation: Float = 1.0
 
                     let color: simd_float3 = color 
                     let attenuatedColor = color * distanceAttenuation
@@ -140,6 +143,7 @@ struct Camera {
     var direction: simd_float3
     var horizontalFov: Double // field of view in radians
     var resolution: simd_int2
+    var up: simd_float3 = simd_float3(0, 1, 0) // assuming camera's up vector is positive y-axis
 
     func generateRays() -> [Ray] {
         var rays: [Ray] = []
@@ -147,18 +151,25 @@ struct Camera {
         let halfWidth = tan(horizontalFov / 2.0)
         let halfHeight = halfWidth / aspectRatio
         
+        // Create camera coordinate system
+        let w = -simd_normalize(direction)  // Forward vector
+        let u = simd_normalize(simd_cross(up, w))  // Right vector
+        let v = simd_normalize(simd_cross(w, u))  // Up vector (normalized)
+        
         for y in 0..<resolution.y {
             for x in 0..<resolution.x {
-                let u = (Double(x) / Double(resolution.x)) * 2.0 - 1.0
-                let v = (Double(y) / Double(resolution.y)) * 2.0 - 1.0
+                let s = (Double(x) / Double(resolution.x)) * 2.0 - 1.0
+                // Flip the t coordinate by negating it
+                let t = -((Double(y) / Double(resolution.y)) * 2.0 - 1.0)
                 
-                let direction = simd_float3(
-                    Float(u * halfWidth),
-                    Float(v * halfHeight),
-                    -1.0 // assuming camera looks down the negative z-axis
+                // Calculate ray direction in camera space
+                let dir = simd_float3(
+                    Float(s * halfWidth) * u +
+                    Float(t * halfHeight) * v -
+                    w
                 )
                 
-                rays.append(Ray(origin: position, direction: simd_normalize(direction)))
+                rays.append(Ray(origin: position, direction: simd_normalize(dir)))
             }
         }
         return rays

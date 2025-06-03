@@ -8,14 +8,14 @@
 import Foundation
 import simd
 
-let sun = SphereLight(center: simd_float3(-50, 50, -20), radius: 10.0, color: simd_float3(1, 1, 1), intensity: 1000.0)
+let sun = SphereLight(center: simd_float3(0, 10, 0), radius: 10.0, color: simd_float3(1, 1, 1), intensity: 30000.0)
 let direction = simd_normalize(simd_float3(0, 0, 0) - simd_float3(13, 2, 3))
-let camera = Camera(position: simd_float3(13, 2, 3), direction: direction, horizontalFov: Double.pi / 4.0, resolution: simd_int2(800, 600))
+let camera = Camera(position: simd_float3(13, 2, 3), direction: direction, horizontalFov: Float.pi / 4.0, resolution: simd_int2(600, 400))
 let spheres = [
-    Sphere(center: simd_float3(0, 1, 0), radius: 1.0, material: Material(color: simd_float3(1, 0, 0), metallic: 0.5, roughness: 0.1)),
-    Sphere(center: simd_float3(-4, 1, 0), radius: 1.0, material: Material(color: simd_float3(0, 1, 0), metallic: 0.5, roughness: 0.1)),
-    Sphere(center: simd_float3(4, 1, 0), radius: 1.0, material: Material(color: simd_float3(0, 0, 1), metallic: 0.5, roughness: 0.1)),
-    Sphere(center: simd_float3(0, -1000, 0), radius: 1000.0, material: Material(color: simd_float3(0.5, 0.5, 0.5), metallic: 0, roughness: 0.9))
+    Sphere(center: simd_float3(4, 1, 0), radius: 1.0, material: Material(diffuse: simd_float3(0, 0, 1), metallic: 1, roughness: 0.01)), //front 
+    Sphere(center: simd_float3(0, 1, 0), radius: 1.0, material: Material(diffuse: simd_float3(1, 0, 0), metallic: 0, roughness: 0.1)), //middle
+    Sphere(center: simd_float3(-4, 1, 0), radius: 1.0, material: Material(diffuse: simd_float3(0, 1, 0), metallic: 0, roughness: 0.9)), //back
+    Sphere(center: simd_float3(0, -1000, 0), radius: 1000.0, material: Material(diffuse: simd_float3(0, 1, 1), metallic: 0, roughness: 1))
 ]
 
 let scene = Scene(spheres: spheres, light: sun, camera: camera)
@@ -45,7 +45,7 @@ class Scene {
             let t2 = (-b + sqrt(discriminant)) / (2.0 * a)
             if t1 > 0 || t2 > 0 {
                 let hitPoint = ray.origin + ray.direction * min(t1, t2)
-                return .hit(point: hitPoint, color: sphere.material.color)
+                return .hit(point: hitPoint, color: sphere.material.diffuse, material: sphere.material, ray: ray, normal: simd_normalize(hitPoint - sphere.center))
             }
         }
         return .miss
@@ -63,7 +63,7 @@ class Scene {
         for sphere in spheres {
             let intersection = intersect(ray: ray, sphere: sphere)
             switch intersection {
-            case .hit(let point, _):
+            case .hit(let point, _, _, _, _):
                 let distance = simd_length(point - ray.origin)
                 if distance < closestDistance {
                     closestDistance = distance
@@ -94,19 +94,48 @@ class Scene {
                     pixels[pixelOffset + 1] = UInt8(color.y * 255)  // G
                     pixels[pixelOffset + 2] = UInt8(color.z * 255)  // B
                     pixels[pixelOffset + 3] = 255        
-                      
-                case .hit(let point, let color):
-                    // get distance between light and intersection 
-                    // let distanceAttenuation = 1 / simd_length(point - light.center)
-                    let distanceAttenuation: Float = 1.0
+                case .hit(let point, _, let material, let ray, let normal):
 
-                    let color: simd_float3 = color 
-                    let attenuatedColor = color * distanceAttenuation
+                    let v = -normalize(ray.direction) // surface to view direction 
+                    let n = normal // surface normal
+                    let l = normalize(light.center - point) // direction to light
+                    let h = normalize(v + l) // half vector between view and light direction
+                    
+                    let NoV = abs(dot(n, v)) + 1e-5  // visbility used for fresnel + shadow
+                    let NoL = min(1.0, max(0.0, dot(n, l))) // shadowing + light attenuation (right now only from angle not distance)
+                    let NoH = min(1.0, max(0.0, dot(n, h)))  // used for microfacet distribution
+                    let LoH = min(1.0, max(0.0, dot(l, h)))  // used for fresnel
+
+                    let D = D_GGX(NoH: NoH, a: material.roughness)
+                    let F = F_Schlick(LoH: LoH, f0: material.diffuse)
+                    let G = V_SmithGGXCorrelated(NoV: NoV, NoL: NoL, a: material.roughness)
+
+                    let Fr = (D * G) * F
+        
+                    // Diffuse BRDF
+                    let energyCompensation = 1.0 - F  // Amount of light not reflected
+                    let Fd: simd_float3 = (Fd_Lambert()) * material.diffuse  * energyCompensation
+                    
+                    // Combine both terms and apply light properties
+                    let BRDF = (Fd + Fr) * NoL
+                    
+                    // Apply light intensity with inverse square falloff
+                    let distanceToLight = simd_length(light.center - point)
+                    let attenuation = light.intensity / (4.0 * Float.pi * distanceToLight * distanceToLight)
+                    
+                    let finalColor = BRDF * light.color * attenuation
+                    // let color = finalColor
+
+                    // let exposure: Float = 0.1 // Adjust this value based on your scene's brightness
+                    // let color = luminanceToRGB(finalColor, exposure: exposure)
+                    var color = finalColor / (finalColor + simd_float3(1, 1, 1)) // Simple tone mapping to avoid overexposure
+                    color = clamp(pow(color, simd_float3(repeating: 1.0 / 2.2)), min: 0, max: 1) // Gamma correction
+
                     let pixelOffset = index * 4
-                    pixels[pixelOffset + 0] = UInt8(attenuatedColor.x * 255)  // R
-                    pixels[pixelOffset + 1] = UInt8(attenuatedColor.y * 255)  // G
-                    pixels[pixelOffset + 2] = UInt8(attenuatedColor.z * 255)  // B
-                    pixels[pixelOffset + 3] = 255                    // A
+                    pixels[pixelOffset + 0] = UInt8(color.x * 255)  // R
+                    pixels[pixelOffset + 1] = UInt8(color.y * 255)  // G
+                    pixels[pixelOffset + 2] = UInt8(color.z * 255)  // B
+                    pixels[pixelOffset + 3] = 255                   // A
                 }
         }
         savePixelArrayToImage(pixels: pixels, width: width, height: height, fileName: "/Users/nishadsharma/Documents/raytrace/gradient.png")
@@ -115,39 +144,39 @@ class Scene {
 }
 
 enum Intersection {
-    case hit(point: simd_float3, color: simd_float3)
+    case hit(point: simd_float3, color: simd_float3, material: Material, ray: Ray, normal: simd_float3)
     case miss
 }
 
 struct Sphere {
     var center: simd_float3
-    var radius: Double
+    var radius: Float
     var material: Material
 }
 
 struct SphereLight {
     var center: simd_float3
-    var radius: Double
+    var radius: Float
     var color: simd_float3
-    var intensity: Double //lumens
+    var intensity: Float //lumens
 }
 
 struct Material {
-    var color: simd_float3
-    var metallic: Double
-    var roughness: Double
+    var diffuse: simd_float3
+    var metallic: Float
+    var roughness: Float
 }
 
 struct Camera {
     var position: simd_float3
     var direction: simd_float3
-    var horizontalFov: Double // field of view in radians
+    var horizontalFov: Float // field of view in radians
     var resolution: simd_int2
     var up: simd_float3 = simd_float3(0, 1, 0) // assuming camera's up vector is positive y-axis
 
     func generateRays() -> [Ray] {
         var rays: [Ray] = []
-        let aspectRatio = Double(resolution.x) / Double(resolution.y)
+        let aspectRatio = Float(resolution.x / resolution.y)
         let halfWidth = tan(horizontalFov / 2.0)
         let halfHeight = halfWidth / aspectRatio
         
@@ -158,9 +187,9 @@ struct Camera {
         
         for y in 0..<resolution.y {
             for x in 0..<resolution.x {
-                let s = (Double(x) / Double(resolution.x)) * 2.0 - 1.0
+                let s = (Float(x) / Float(resolution.x)) * 2.0 - 1.0
                 // Flip the t coordinate by negating it
-                let t = -((Double(y) / Double(resolution.y)) * 2.0 - 1.0)
+                let t = -((Float(y) / Float(resolution.y)) * 2.0 - 1.0)
                 
                 // Calculate ray direction in camera space
                 let dir = simd_float3(
@@ -174,7 +203,6 @@ struct Camera {
         }
         return rays
     }
-
 }
 
 struct Ray {

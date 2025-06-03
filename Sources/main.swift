@@ -8,15 +8,17 @@
 import Foundation
 import simd
 
-let sun = SphereLight(center: simd_float3(0, 10, 0), radius: 10.0, color: simd_float3(1, 1, 1), intensity: 30000.0)
+let sun = SphereLight(center: simd_float3(0, 100, 0), radius: 30.0, color: simd_float3(1, 1, 1), intensity: 2000.0)
 let direction = simd_normalize(simd_float3(0, 0, 0) - simd_float3(13, 2, 3))
-let camera = Camera(position: simd_float3(13, 2, 3), direction: direction, horizontalFov: Float.pi / 4.0, resolution: simd_int2(600, 400))
+let camera = Camera(position: simd_float3(13, 2, 3), direction: direction, horizontalFov: Float.pi / 4.0, resolution: simd_int2(400, 300))
 let spheres = [
-    Sphere(center: simd_float3(4, 1, 0), radius: 1.0, material: Material(diffuse: simd_float3(0, 0, 1), metallic: 1, roughness: 0.01)), //front 
-    Sphere(center: simd_float3(0, 1, 0), radius: 1.0, material: Material(diffuse: simd_float3(1, 0, 0), metallic: 0, roughness: 0.1)), //middle
-    Sphere(center: simd_float3(-4, 1, 0), radius: 1.0, material: Material(diffuse: simd_float3(0, 1, 0), metallic: 0, roughness: 0.9)), //back
-    Sphere(center: simd_float3(0, -1000, 0), radius: 1000.0, material: Material(diffuse: simd_float3(0, 1, 1), metallic: 0, roughness: 1))
+    Sphere(center: simd_float3(4, 2, 0), radius: 1.0, material: Material(diffuse: simd_float3(0, 0, 1), metallic: 1, roughness: 0.01)), //front 
+    Sphere(center: simd_float3(0, 2, 0), radius: 1.0, material: Material(diffuse: simd_float3(1, 0, 0), metallic: 0.05, roughness: 0.1)), //middle
+    Sphere(center: simd_float3(-4, 2, 0), radius: 1.0, material: Material(diffuse: simd_float3(0, 1, 0), metallic: 0.05, roughness: 0.9)), //back
+    Sphere(center: simd_float3(0, -100, 0), radius: 100.0, material: Material(diffuse: simd_float3(0, 0.2, 0), metallic: 0.05, roughness: 0.999))
 ]
+
+let samples = 40
 
 let scene = Scene(spheres: spheres, light: sun, camera: camera)
 scene.render()
@@ -32,26 +34,7 @@ class Scene {
         self.light = light
         self.camera = camera
     }
-
-    func intersect(ray: Ray, sphere: Sphere) -> Intersection {
-        let oc = ray.origin - sphere.center
-        let a = simd_dot(ray.direction, ray.direction)
-        let b = 2.0 * simd_dot(oc, ray.direction)
-        let c = simd_dot(oc, oc) - Float(sphere.radius * sphere.radius)
-        let discriminant = b * b - 4 * a * c
-
-        if discriminant > 0 {
-            let t1 = (-b - sqrt(discriminant)) / (2.0 * a)
-            let t2 = (-b + sqrt(discriminant)) / (2.0 * a)
-            if t1 > 0 || t2 > 0 {
-                let hitPoint = ray.origin + ray.direction * min(t1, t2)
-                return .hit(point: hitPoint, color: sphere.material.diffuse, material: sphere.material, ray: ray, normal: simd_normalize(hitPoint - sphere.center))
-            }
-        }
-        return .miss
-    }
-
-
+    
     func generateRays(intersection: Intersection) -> [Ray] {
         return []
     }
@@ -59,6 +42,15 @@ class Scene {
     func getClosestIntersection(ray: Ray) -> Intersection {
         var closestIntersection: Intersection = .miss
         var closestDistance: Float = Float.infinity
+
+        let sunIntersection = intersect(ray: ray, sphere: light.toSphere())
+        switch sunIntersection {
+        case .hit(let point, _, _, _, _):
+            closestIntersection = .hitSun(point: point, color: light.color, intensity: light.intensity)
+            closestDistance = simd_length(point - ray.origin) // Sun is always the closest if hit
+        case _:
+            break // No intersection with sun, continue checking spheres
+        }
 
         for sphere in spheres {
             let intersection = intersect(ray: ray, sphere: sphere)
@@ -69,11 +61,34 @@ class Scene {
                     closestDistance = distance
                     closestIntersection = intersection
                 }
-            case .miss:
+            case _:
                 continue
             }
         }
         return closestIntersection
+    }
+
+    func calculateTotalLighting(normal: simd_float3, samples: Int, ray: Ray, point: simd_float3, material: Material) -> simd_float3 {
+        var totalLight = simd_float3(0, 0, 0)
+        for _ in 0..<samples {
+            let u = randomFloat()
+            let v = randomFloat()
+            let l = getUniformlyDistributedLightVector(u: u, v: v, normal: normal)
+            let i = getClosestIntersection(ray: Ray(origin: point, direction: l))
+
+            var lightValue: simd_float3 = simd_float3(0, 0, 0)
+
+            switch i {
+            case .hitSun(_, let color, let intensity):
+                lightValue = color * intensity // Sun light contribution
+            case _:
+                lightValue = simd_float3(0,0,0) // ambient
+            }
+            
+            totalLight += calculateBRDFContribution(ray: ray, point: point, normal: normal, material: material, l: l, lightValue: lightValue)
+        }
+            
+        return totalLight
     }
 
     func render() {
@@ -95,48 +110,24 @@ class Scene {
                     pixels[pixelOffset + 2] = UInt8(color.z * 255)  // B
                     pixels[pixelOffset + 3] = 255        
                 case .hit(let point, _, let material, let ray, let normal):
-
-                    let v = -normalize(ray.direction) // surface to view direction 
-                    let n = normal // surface normal
-                    let l = normalize(light.center - point) // direction to light
-                    let h = normalize(v + l) // half vector between view and light direction
-                    
-                    let NoV = abs(dot(n, v)) + 1e-5  // visbility used for fresnel + shadow
-                    let NoL = min(1.0, max(0.0, dot(n, l))) // shadowing + light attenuation (right now only from angle not distance)
-                    let NoH = min(1.0, max(0.0, dot(n, h)))  // used for microfacet distribution
-                    let LoH = min(1.0, max(0.0, dot(l, h)))  // used for fresnel
-
-                    let D = D_GGX(NoH: NoH, a: material.roughness)
-                    let F = F_Schlick(LoH: LoH, f0: material.diffuse)
-                    let G = V_SmithGGXCorrelated(NoV: NoV, NoL: NoL, a: material.roughness)
-
-                    let Fr = (D * G) * F
-        
-                    // Diffuse BRDF
-                    let energyCompensation = 1.0 - F  // Amount of light not reflected
-                    let Fd: simd_float3 = (Fd_Lambert()) * material.diffuse  * energyCompensation
-                    
-                    // Combine both terms and apply light properties
-                    let BRDF = (Fd + Fr) * NoL
-                    
-                    // Apply light intensity with inverse square falloff
-                    let distanceToLight = simd_length(light.center - point)
-                    let attenuation = light.intensity / (4.0 * Float.pi * distanceToLight * distanceToLight)
-                    
-                    let finalColor = BRDF * light.color * attenuation
-                    // let color = finalColor
-
-                    // let exposure: Float = 0.1 // Adjust this value based on your scene's brightness
-                    // let color = luminanceToRGB(finalColor, exposure: exposure)
-                    var color = finalColor / (finalColor + simd_float3(1, 1, 1)) // Simple tone mapping to avoid overexposure
-                    color = clamp(pow(color, simd_float3(repeating: 1.0 / 2.2)), min: 0, max: 1) // Gamma correction
+                    let totalLight = calculateTotalLighting(normal: normal, samples: samples, ray: ray, point: point, material: material)
+                    let color = reinhartToneMapping(color: totalLight)
 
                     let pixelOffset = index * 4
                     pixels[pixelOffset + 0] = UInt8(color.x * 255)  // R
                     pixels[pixelOffset + 1] = UInt8(color.y * 255)  // G
                     pixels[pixelOffset + 2] = UInt8(color.z * 255)  // B
                     pixels[pixelOffset + 3] = 255                   // A
-                }
+                case .hitSun(_, let color, let intensity):
+                    let totalLight = color * intensity
+                    let finalColor = reinhartToneMapping(color: totalLight)
+                    // Handle sun light intersection
+                    let pixelOffset = index * 4
+                    pixels[pixelOffset + 0] = UInt8(finalColor.x * 255)  // R
+                    pixels[pixelOffset + 1] = UInt8(finalColor.y * 255)  // G
+                    pixels[pixelOffset + 2] = UInt8(finalColor.z * 255)  // B
+                    pixels[pixelOffset + 3] = 255 // A
+            }
         }
         savePixelArrayToImage(pixels: pixels, width: width, height: height, fileName: "/Users/nishadsharma/Documents/raytrace/gradient.png")
     }
@@ -145,6 +136,7 @@ class Scene {
 
 enum Intersection {
     case hit(point: simd_float3, color: simd_float3, material: Material, ray: Ray, normal: simd_float3)
+    case hitSun(point: simd_float3, color: simd_float3, intensity: Float)
     case miss
 }
 
@@ -159,6 +151,10 @@ struct SphereLight {
     var radius: Float
     var color: simd_float3
     var intensity: Float //lumens
+
+    func toSphere() -> Sphere {
+        return Sphere(center: center, radius: radius, material: Material(diffuse: color, metallic: 0, roughness: 1))
+    }
 }
 
 struct Material {
@@ -197,7 +193,6 @@ struct Camera {
                     Float(t * halfHeight) * v -
                     w
                 )
-                
                 rays.append(Ray(origin: position, direction: simd_normalize(dir)))
             }
         }
@@ -209,3 +204,21 @@ struct Ray {
     var origin: simd_float3
     var direction: simd_float3    
 }
+
+func intersect(ray: Ray, sphere: Sphere) -> Intersection {
+        let oc = ray.origin - sphere.center
+        let a = simd_dot(ray.direction, ray.direction)
+        let b = 2.0 * simd_dot(oc, ray.direction)
+        let c = simd_dot(oc, oc) - Float(sphere.radius * sphere.radius)
+        let discriminant = b * b - 4 * a * c
+
+        if discriminant > 0 {
+            let t1 = (-b - sqrt(discriminant)) / (2.0 * a)
+            let t2 = (-b + sqrt(discriminant)) / (2.0 * a)
+            if t1 > 0 || t2 > 0 {
+                let hitPoint = ray.origin + ray.direction * min(t1, t2)
+                return .hit(point: hitPoint, color: sphere.material.diffuse, material: sphere.material, ray: ray, normal: simd_normalize(hitPoint - sphere.center))
+            }
+        }
+        return .miss
+    }

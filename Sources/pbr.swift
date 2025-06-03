@@ -166,8 +166,7 @@ func D_GGX(NoH: Float, a: Float) -> Float {
 }
 
 func F_Schlick(LoH: Float, f0: simd_float3) -> simd_float3 {
-    let reflected = f0 + (simd_float3(1,1,1) - f0)
-    return  reflected * pow(1.0 - LoH, 5.0)
+    return f0 + (simd_float3(1,1,1) - f0) * pow(1.0 - LoH, 5.0)
 }
 
 func V_SmithGGXCorrelated(NoV: Float, NoL: Float, a: Float) -> Float {
@@ -179,4 +178,65 @@ func V_SmithGGXCorrelated(NoV: Float, NoL: Float, a: Float) -> Float {
 
 func Fd_Lambert() -> Float {
     return 1.0 / Float.pi
+}
+
+func getUniformlyDistributedLightVector(u: Float, v: Float, normal: simd_float3) -> simd_float3 {
+    // Generate uniform sampling in hemisphere
+    let phi = 2.0 * Float.pi * u
+    let cosTheta = v
+    let sinTheta = sqrt(1.0 - cosTheta * cosTheta)
+    
+    // Create vector in local space
+    let x = cos(phi) * sinTheta
+    let y = sin(phi) * sinTheta
+    let z = cosTheta
+    
+    // Convert to world space using the normal as up vector
+    let (tangent, bitangent) = buildOrthonormalBasis(normal)
+    
+    // Transform from local to world space
+    return normalize(
+        tangent * x +
+        bitangent * y +
+        normal * z
+    )
+}
+
+    
+func calculateBRDFContribution(ray: Ray, point: simd_float3, normal: simd_float3, material: Material, l: simd_float3, lightValue: simd_float3) -> simd_float3 {
+    let v = -normalize(ray.direction) // surface to view direction 
+    let n = normal // surface normal
+
+    let h = normalize(v + l) // half vector between view and light direction
+    
+    let NoV = abs(dot(n, v)) + 1e-5  // visbility used for fresnel + shadow
+    let NoL = min(1.0, max(0.0, dot(n, l))) // shadowing + light attenuation (right now only from angle not distance)
+    let NoH = min(1.0, max(0.0, dot(n, h)))  // used for microfacet distribution
+    let LoH = min(1.0, max(0.0, dot(l, h)))  // used for fresnel
+
+    let dielectricF0 = simd_float3(repeating: 0.04) // Default F0 for dielectric materials
+    let f0 = simd_mix(dielectricF0, material.diffuse, simd_float3(repeating: material.metallic))
+
+    let D = D_GGX(NoH: NoH, a: material.roughness)
+    let F = F_Schlick(LoH: LoH, f0: simd_float3(repeating: 0.04))
+    let G = V_SmithGGXCorrelated(NoV: NoV, NoL: NoL, a: material.roughness)
+
+    let Fr = (D * G) * F
+
+    // Diffuse BRDF
+    let energyCompensation = simd_float3(repeating: 1.0) - F  // Amount of light not reflected
+    let Fd: simd_float3 = material.diffuse * (Fd_Lambert()) * energyCompensation
+    
+    // Combine both terms and apply light properties
+    let BRDF = (Fd + Fr)
+    
+    let finalColor = BRDF * lightValue
+
+    return finalColor
+}
+
+func reinhartToneMapping(color: simd_float3) -> simd_float3 {
+    var finalColor = color / (color + simd_float3(1, 1, 1)) // Simple tone mapping to avoid overexposure
+    finalColor = clamp(pow(color, simd_float3(repeating: 1.0 / 2.2)), min: 0, max: 1) // Gamma correction
+    return finalColor
 }

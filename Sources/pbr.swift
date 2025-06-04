@@ -129,36 +129,6 @@ func PBRShade(normal: simd_float3, material: Material, incomingRay: Ray) -> simd
     return weight
 }
 
-func luminanceToRGB(_ luminance: simd_float3, exposure: Float = 1.0) -> simd_float3 {
-        // Apply exposure compensation
-        let exposedColor = luminance * exposure
-        
-        // ACES tone mapping parameters
-        let a: Float = 2.51
-        let b: Float = 0.03
-        let c: Float = 2.43
-        let d: Float = 0.59
-        let e: Float = 0.14
-        
-        // Apply ACES filmic tone mapping curve to each channel
-        let ax = (a * exposedColor.x + b)
-        let ay = (a * exposedColor.y + b)
-        let az = (a * exposedColor.z + b)
-        let cx = (c * exposedColor.x + d)
-        let cy = (c * exposedColor.y + d)
-        let cz = (c * exposedColor.z + d)
-
-
-        let toneMapped = simd_float3(
-            (exposedColor.x * ax) / (exposedColor.x * cx + e),
-            (exposedColor.y * ay) / (exposedColor.y * cy + e),
-            (exposedColor.z * az) / (exposedColor.z * cz + e)
-        )
-        
-        // Clamp values to [0,1] range
-        return simd_clamp(toneMapped, simd_float3(0,0,0), simd_float3(1,1,1))
-}
-
 func D_GGX(NoH: Float, a: Float) -> Float {
     let a2 = a * a
     let f = (NoH * a2 - NoH) * NoH + 1.0
@@ -218,19 +188,19 @@ func calculateBRDFContribution(ray: Ray, point: simd_float3, normal: simd_float3
     let f0 = simd_mix(dielectricF0, material.diffuse, simd_float3(repeating: material.metallic))
 
     let D = D_GGX(NoH: NoH, a: material.roughness)
-    let F = F_Schlick(LoH: LoH, f0: simd_float3(repeating: 0.04))
+    let F = F_Schlick(LoH: LoH, f0: f0)
     let G = V_SmithGGXCorrelated(NoV: NoV, NoL: NoL, a: material.roughness)
 
-    let Fr = (D * G) * F
+    let Fr = (D * G) * F / (4.0 * NoV * NoL + 1e-7) 
 
     // Diffuse BRDF
     let energyCompensation = simd_float3(repeating: 1.0) - F  // Amount of light not reflected
-    let Fd: simd_float3 = material.diffuse * (Fd_Lambert()) * energyCompensation
+    let Fd: simd_float3 = material.diffuse * (Fd_Lambert()) * energyCompensation * (1.0 - material.metallic)
     
     // Combine both terms and apply light properties
     let BRDF = (Fd + Fr)
     
-    let finalColor = BRDF * lightValue
+    let finalColor = BRDF * lightValue * NoL
 
     return finalColor
 }

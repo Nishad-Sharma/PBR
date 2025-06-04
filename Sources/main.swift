@@ -8,9 +8,11 @@
 import Foundation
 import simd
 
-let sun = SphereLight(center: simd_float3(0, 100, 0), radius: 30.0, color: simd_float3(1, 1, 1), intensity: 2000.0)
+let lightBulb = SphereLight(center: simd_float3(3, 3, 3), radius: 1.0,
+    color: simd_float3(1, 0.9, 0.7), LightType: .bulb(efficacy: 15, watts: 2000))
 let direction = simd_normalize(simd_float3(0, 0, 0) - simd_float3(13, 2, 3))
-let camera = Camera(position: simd_float3(13, 2, 3), direction: direction, horizontalFov: Float.pi / 4.0, resolution: simd_int2(400, 300))
+let camera = Camera(position: simd_float3(13, 2, 3), direction: direction, 
+    horizontalFov: Float.pi / 4.0, resolution: simd_int2(400, 300))
 let spheres = [
     Sphere(center: simd_float3(4, 2, 0), radius: 1.0, material: Material(diffuse: simd_float3(0, 0, 1), metallic: 1, roughness: 0.01)), //front 
     Sphere(center: simd_float3(0, 2, 0), radius: 1.0, material: Material(diffuse: simd_float3(1, 0, 0), metallic: 0.05, roughness: 0.1)), //middle
@@ -18,9 +20,9 @@ let spheres = [
     Sphere(center: simd_float3(0, -100, 0), radius: 100.0, material: Material(diffuse: simd_float3(0, 0.2, 0), metallic: 0.05, roughness: 0.999))
 ]
 
-let samples = 40
+let samples = 500
 
-let scene = Scene(spheres: spheres, light: sun, camera: camera)
+let scene = Scene(spheres: spheres, light: lightBulb, camera: camera)
 scene.render()
 
 class Scene {
@@ -43,13 +45,13 @@ class Scene {
         var closestIntersection: Intersection = .miss
         var closestDistance: Float = Float.infinity
 
-        let sunIntersection = intersect(ray: ray, sphere: light.toSphere())
-        switch sunIntersection {
+        let lightIntersection = intersect(ray: ray, sphere: light.toSphere())
+        switch lightIntersection {
         case .hit(let point, _, _, _, _):
-            closestIntersection = .hitSun(point: point, color: light.color, intensity: light.intensity)
-            closestDistance = simd_length(point - ray.origin) // Sun is always the closest if hit
+            closestIntersection = .hitLight(point: point, color: light.color, radiance: light.emittedRadiance)
+            closestDistance = simd_length(point - ray.origin) // Light is always the closest if hit
         case _:
-            break // No intersection with sun, continue checking spheres
+            break // No intersection with light, continue checking spheres
         }
 
         for sphere in spheres {
@@ -79,8 +81,8 @@ class Scene {
             var lightValue: simd_float3 = simd_float3(0, 0, 0)
 
             switch i {
-            case .hitSun(_, let color, let intensity):
-                lightValue = color * intensity // Sun light contribution
+            case .hitLight(_,_, let radiance):
+                lightValue = radiance
             case _:
                 lightValue = simd_float3(0,0,0) // ambient
             }
@@ -118,8 +120,8 @@ class Scene {
                     pixels[pixelOffset + 1] = UInt8(color.y * 255)  // G
                     pixels[pixelOffset + 2] = UInt8(color.z * 255)  // B
                     pixels[pixelOffset + 3] = 255                   // A
-                case .hitSun(_, let color, let intensity):
-                    let totalLight = color * intensity
+                case .hitLight(_, _, let radiance):
+                    let totalLight = radiance
                     let finalColor = reinhartToneMapping(color: totalLight)
                     // Handle sun light intersection
                     let pixelOffset = index * 4
@@ -129,14 +131,14 @@ class Scene {
                     pixels[pixelOffset + 3] = 255 // A
             }
         }
-        savePixelArrayToImage(pixels: pixels, width: width, height: height, fileName: "/Users/nishadsharma/Documents/raytrace/gradient.png")
+        savePixelArrayToImage(pixels: pixels, width: width, height: height, fileName: "/Users/rishflab/PBR/gradient.png")
     }
 
 }
 
 enum Intersection {
     case hit(point: simd_float3, color: simd_float3, material: Material, ray: Ray, normal: simd_float3)
-    case hitSun(point: simd_float3, color: simd_float3, intensity: Float)
+    case hitLight(point: simd_float3, color: simd_float3, radiance: simd_float3)
     case miss
 }
 
@@ -146,11 +148,38 @@ struct Sphere {
     var material: Material
 }
 
+enum LightType {
+    case bulb(efficacy: Float, watts: Float)
+    case radiometic(radiantFlux: Float) 
+}
+
 struct SphereLight {
     var center: simd_float3
     var radius: Float
     var color: simd_float3
-    var intensity: Float //lumens
+    var LightType: LightType
+
+    // Convert to radiance for outgoing rays
+    var emittedRadiance: simd_float3 {
+        switch LightType {
+        case .bulb(let efficacy, let watts):
+            let luminousFlux = efficacy * watts // lm
+            let radiantFlux = luminousFlux / 683.0 // Convert lumens to watts (assuming 555 nm peak sensitivity)
+            return calculateRadiance(radiantFlux: radiantFlux)
+        case .radiometic(let radiantFlux):
+            return calculateRadiance(radiantFlux: radiantFlux)
+        }
+    }
+
+    func calculateRadiance(radiantFlux: Float) -> simd_float3 {
+        let surfaceArea = 4.0 * Float.pi * radius * radius
+        let radiantExitance = radiantFlux / surfaceArea // W/m²
+        
+        // For Lambertian emitter: radiance = exitance / π
+        let radiance = radiantExitance / Float.pi // W/(sr·m²)
+        
+        return color * radiance
+    }
 
     func toSphere() -> Sphere {
         return Sphere(center: center, radius: radius, material: Material(diffuse: color, metallic: 0, roughness: 1))
@@ -217,7 +246,13 @@ func intersect(ray: Ray, sphere: Sphere) -> Intersection {
             let t2 = (-b + sqrt(discriminant)) / (2.0 * a)
             if t1 > 0 || t2 > 0 {
                 let hitPoint = ray.origin + ray.direction * min(t1, t2)
-                return .hit(point: hitPoint, color: sphere.material.diffuse, material: sphere.material, ray: ray, normal: simd_normalize(hitPoint - sphere.center))
+                let normal = simd_normalize(hitPoint - sphere.center)
+             
+                 // Offset the hit point slightly along the normal to prevent self-intersection
+                let epsilon: Float = 1e-4
+                let offsetHitPoint = hitPoint + normal * epsilon
+
+                return .hit(point: offsetHitPoint, color: sphere.material.diffuse, material: sphere.material, ray: ray, normal: simd_normalize(hitPoint - sphere.center))
             }
         }
         return .miss

@@ -205,8 +205,8 @@ func calculateBRDFContribution(ray: Ray, point: simd_float3, normal: simd_float3
     return finalColor
 }
 
-func reinhartToneMapping(color: simd_float3) -> simd_float3 {
-    var finalColor = color / (color + simd_float3(1, 1, 1)) // Simple tone mapping to avoid overexposure
-    finalColor = clamp(pow(color, simd_float3(repeating: 1.0 / 2.2)), min: 0, max: 1) // Gamma correction
+func reinhartToneMapping(_ value: simd_float3) -> simd_float3 {
+    var finalColor = value / (value + simd_float3(1, 1, 1)) // Simple tone mapping to avoid overexposure
+    finalColor = clamp(pow(value, simd_float3(repeating: 1.0 / 2.2)), min: 0, max: 1) // Gamma correction
     return finalColor
 }

@@ -113,7 +113,7 @@ class Scene {
                     pixels[pixelOffset + 3] = 255        
                 case .hit(let point, _, let material, let ray, let normal):
                     let totalLight = calculateTotalLighting(normal: normal, samples: samples, ray: ray, point: point, material: material)
-                    let color = reinhartToneMapping(color: totalLight)
+                    let color = reinhartToneMapping(camera.exposure() * totalLight)
 
                     let pixelOffset = index * 4
                     pixels[pixelOffset + 0] = UInt8(color.x * 255)  // R
@@ -122,7 +122,7 @@ class Scene {
                     pixels[pixelOffset + 3] = 255                   // A
                 case .hitLight(_, _, let radiance):
                     let totalLight = radiance
-                    let finalColor = reinhartToneMapping(color: totalLight)
+                    let finalColor = reinhartToneMapping(camera.exposure() * totalLight)
                     // Handle sun light intersection
                     let pixelOffset = index * 4
                     pixels[pixelOffset + 0] = UInt8(finalColor.x * 255)  // R
@@ -198,7 +198,12 @@ struct Camera {
     var horizontalFov: Float // field of view in radians
     var resolution: simd_int2
     var up: simd_float3 = simd_float3(0, 1, 0) // assuming camera's up vector is positive y-axis
-
+    var ev100: Float = 2.2
+    
+    func exposure() -> Float {
+        return 1.0 / pow(2.0, ev100 * 1.2)
+    }
+    
     func generateRays() -> [Ray] {
         var rays: [Ray] = []
         let aspectRatio = Float(resolution.x / resolution.y)

@@ -21,28 +21,42 @@ func buildOrthonormalBasis(_ normal: SIMD3<Float>) -> (tangent: SIMD3<Float>, bi
 
 // MARK: - GGX Sampling
 
-func sampleGGXHalfVector(_ u1: Float, _ u2: Float, _ roughness: Float, _ normal: SIMD3<Float>) -> SIMD3<Float> {
+func sampleGGX(viewDir: simd_float3, normal: simd_float3, roughness: Float) -> (direction: simd_float3, pdf: Float) {
+    let u1 = randomFloat()
+    let u2 = randomFloat()
+
     let alpha = roughness * roughness
-    
-    // Sample in spherical coordinates
+
+    // Sample half vector in spherical coordinates
     let cosTheta = sqrt((1.0 - u1) / (1.0 + (alpha * alpha - 1.0) * u1))
     let sinTheta = sqrt(1.0 - cosTheta * cosTheta)
     let phi = 2.0 * Float.pi * u2
-    
+
     // Half-vector in local tangent space
-    let halfVecLocal = SIMD3<Float>(
+    let halfVecLocal = simd_float3(
         sinTheta * cos(phi),
         sinTheta * sin(phi),
         cosTheta
     )
-    
+
     // Transform to world space
     let basis = buildOrthonormalBasis(normal)
-    return normalize(
+    let halfVector = normalize(
         basis.tangent * halfVecLocal.x +
         basis.bitangent * halfVecLocal.y +
         normal * halfVecLocal.z
     )
+
+    // Reflect view direction around half vector to get light direction
+    let lightDirection = reflect(-viewDir, halfVector)
+
+    // Calculate PDF
+    let NoH = max(0.0, dot(normal, halfVector))
+    let VoH = max(0.0, dot(viewDir, halfVector))
+    let D = D_GGX(NoH: NoH, a: roughness)
+    let pdf = (D * NoH) / (4.0 * VoH + 1e-6)
+
+    return (direction: lightDirection, pdf: pdf)
 }
 
 // MARK: - BRDF Evaluation
@@ -93,41 +107,41 @@ func calculateGGXPDF(_ halfVector: SIMD3<Float>, _ normal: SIMD3<Float>, _ viewD
 
 // MARK: - Main Ray Generation Function
 
-func PBRShade(normal: simd_float3, material: Material, incomingRay: Ray) -> simd_float3 {
-    let viewDir = -normalize(incomingRay.direction)  // Direction towards camera
+// func PBRShade(normal: simd_float3, material: Material, incomingRay: Ray) -> simd_float3 {
+//     let viewDir = -normalize(incomingRay.direction)  // Direction towards camera
 
-    // Generate random numbers
-    let u1 = randomFloat()
-    let u2 = randomFloat()
+//     // Generate random numbers
+//     let u1 = randomFloat()
+//     let u2 = randomFloat()
     
-    // Sample half-vector according to GGX distribution
-    let halfVector = sampleGGXHalfVector(u1, u2, material.roughness, normal)
+//     // Sample half-vector according to GGX distribution
+//     let halfVector = sampleGGXHalfVector(u1, u2, material.roughness, normal)
     
-    // Generate reflection ray
-    let lightDir = normalize(reflect(-viewDir, halfVector))
+//     // Generate reflection ray
+//     let lightDir = normalize(reflect(-viewDir, halfVector))
     
-    // Check if ray is above surface
-    guard dot(lightDir, normal) > 0 else {
-        return simd_float3(0, 0, 0) // Invalid direction
-    }
+//     // Check if ray is above surface
+//     guard dot(lightDir, normal) > 0 else {
+//         return simd_float3(0, 0, 0) // Invalid direction
+//     }
     
-    // Calculate PDF
-    let pdf = calculateGGXPDF(halfVector, normal, viewDir, material.roughness)
-    guard pdf > 0 else {
-        return simd_float3(0, 0, 0) // Invalid direction
-    }
+//     // Calculate PDF
+//     let pdf = calculateGGXPDF(halfVector, normal, viewDir, material.roughness)
+//     guard pdf > 0 else {
+//         return simd_float3(0, 0, 0) // Invalid direction
+//     }
     
-    // Calculate BRDF and weight
-    let brdf = evaluateGGXBRDF(lightDir: lightDir, viewDir: viewDir, normal: normal, material: material)
-    let NdotL = max(0.0, dot(normal, lightDir))
+//     // Calculate BRDF and weight
+//     let brdf = evaluateGGXBRDF(lightDir: lightDir, viewDir: viewDir, normal: normal, material: material)
+//     let NdotL = max(0.0, dot(normal, lightDir))
 
-    // let energyFactor = 1.0 / Float.pi // Energy conservation factor
-    let energyFactor: Float = 1.0
-    let weight = brdf * NdotL * energyFactor / max(pdf, 1e-6)
+//     // let energyFactor = 1.0 / Float.pi // Energy conservation factor
+//     let energyFactor: Float = 1.0
+//     let weight = brdf * NdotL * energyFactor / max(pdf, 1e-6)
     
-    // return RaySample(direction: lightDir, pdf: pdf, weight: weight)
-    return weight
-}
+//     // return RaySample(direction: lightDir, pdf: pdf, weight: weight)
+//     return weight
+// }
 
 func D_GGX(NoH: Float, a: Float) -> Float {
     let a2 = a * a

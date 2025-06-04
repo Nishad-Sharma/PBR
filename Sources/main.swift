@@ -89,10 +89,8 @@ class Scene {
         }
 
         for _ in 0..<brdfSamples {
-            let u = randomFloat()
-            let v = randomFloat()
-            let l = getUniformlyDistributedLightVector(u: u, v: v, normal: normal)
-            let i = getClosestIntersection(ray: Ray(origin: point, direction: l))
+            let ggxSample = sampleGGX(viewDir: -normalize(ray.direction), normal: normal, roughness: material.roughness)
+            let i = getClosestIntersection(ray: Ray(origin: point, direction: ggxSample.direction))
 
             var lightValue: simd_float3 = simd_float3(0, 0, 0)
 
@@ -102,12 +100,8 @@ class Scene {
             case _:
                 lightValue = simd_float3(0,0,0) // ambient
             }
-
-            // let hemispherePDF = 1 / (2 * Float.pi) // Uniform hemisphere sampling PDF
-            let cosTheta = max(0.0, dot(normal, l))
-            let pdf = cosTheta / Float.pi // Cosine-weighted hemisphere sampling PDF
             
-            totalLight += calculateBRDFContribution(ray: ray, point: point, normal: normal, material: material, l: l, lightValue: lightValue) / max(pdf, 1e-6)
+            totalLight += calculateBRDFContribution(ray: ray, point: point, normal: normal, material: material, l: ggxSample.direction, lightValue: lightValue) / max(ggxSample.pdf, 1e-6)
         }
             
         return totalLight

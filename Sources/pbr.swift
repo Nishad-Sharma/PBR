@@ -171,7 +171,6 @@ func getUniformlyDistributedLightVector(u: Float, v: Float, normal: simd_float3)
         normal * z
     )
 }
-
     
 func calculateBRDFContribution(ray: Ray, point: simd_float3, normal: simd_float3, material: Material, l: simd_float3, lightValue: simd_float3) -> simd_float3 {
     let v = -normalize(ray.direction) // surface to view direction 
@@ -209,4 +208,57 @@ func reinhartToneMapping(_ value: simd_float3) -> simd_float3 {
     var finalColor = value / (value + simd_float3(1, 1, 1)) // Simple tone mapping to avoid overexposure
     finalColor = clamp(pow(value, simd_float3(repeating: 1.0 / 2.2)), min: 0, max: 1) // Gamma correction
     return finalColor
+}
+
+func khronosToneMapping(color: simd_float3) -> simd_float3 {
+    let startCompression: Float = 0.8 - 0.04
+    let desaturation: Float = 0.15
+
+    let x = min(color.x, min(color.y, color.z))
+    let offset = x < 0.08 ? x - 6.25 * x * x : 0.04
+    var offsetColor = color - simd_float3(repeating: offset)
+    let peak = max(color.x, max(color.y, color.z))
+    if peak < startCompression {
+        return offsetColor
+    }
+    let d = 1 - startCompression
+    let newPeak = 1 - d * d / (peak + d - startCompression)
+    offsetColor *= newPeak / peak
+    let g = 1 - 1 / (desaturation * (peak - newPeak) + 1)
+    return mix(offsetColor, newPeak * simd_float3(repeating: 1.0), t: g)
+}
+
+func sampleSphereLight(light: SphereLight, point: simd_float3) -> (direction: simd_float3, pdf: Float, radiance: simd_float3) {
+    // Sample a random point on the light sphere surface
+    let u1 = randomFloat()
+    let u2 = randomFloat()
+
+    // Uniform sampling on sphere surface
+    let cosTheta = 1.0 - 2.0 * u1
+    let sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta))
+    let phi = 2.0 * Float.pi * u2
+
+    // Point on light sphere in local coordinates
+    let localPoint = simd_float3(
+        sinTheta * cos(phi),
+        sinTheta * sin(phi),
+        cosTheta
+    )
+
+    // Transform to world space
+    let lightSurfacePoint = light.center + localPoint * light.radius
+
+    // Direction from surface point to light
+    let lightDirection = lightSurfacePoint - point
+    let distance = simd_length(lightDirection)
+    let normalizedDirection = lightDirection / distance
+
+    // PDF calculation (solid angle)
+    let lightSurfaceArea = 4.0 * Float.pi * light.radius * light.radius
+    let cosLightNormal = dot(-normalizedDirection, localPoint) // Angle at light surface
+
+    // Convert area PDF to solid angle PDF
+    let pdf = (distance * distance) / (lightSurfaceArea * max(cosLightNormal, 1e-6))
+
+    return (direction: normalizedDirection, pdf: pdf, radiance: light.emittedRadiance)
 }

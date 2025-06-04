@@ -8,11 +8,11 @@
 import Foundation
 import simd
 
-let lightBulb = SphereLight(center: simd_float3(3, 3, 3), radius: 1.0,
+let lightBulb = SphereLight(center: simd_float3(3, 3, 3), radius: 0.1,
     color: simd_float3(1, 0.9, 0.7), LightType: .bulb(efficacy: 15, watts: 2000))
 let direction = simd_normalize(simd_float3(0, 0, 0) - simd_float3(13, 2, 3))
 let camera = Camera(position: simd_float3(13, 2, 3), direction: direction, 
-    horizontalFov: Float.pi / 4.0, resolution: simd_int2(400, 300))
+    horizontalFov: Float.pi / 4.0, resolution: simd_int2(800, 600))
 let spheres = [
     Sphere(center: simd_float3(4, 2, 0), radius: 1.0, material: Material(diffuse: simd_float3(0, 0, 1), metallic: 1, roughness: 0.01)), //front 
     Sphere(center: simd_float3(0, 2, 0), radius: 1.0, material: Material(diffuse: simd_float3(1, 0, 0), metallic: 0.05, roughness: 0.1)), //middle
@@ -72,7 +72,23 @@ class Scene {
 
     func calculateTotalLighting(normal: simd_float3, samples: Int, ray: Ray, point: simd_float3, material: Material) -> simd_float3 {
         var totalLight = simd_float3(0, 0, 0)
-        for _ in 0..<samples {
+
+        let lightSamples = samples / 2
+        let brdfSamples = samples - lightSamples
+
+        for _ in 0..<lightSamples {
+            let lightSample = sampleSphereLight(light: lightBulb, point: point)
+            let i = getClosestIntersection(ray: Ray(origin: point, direction: lightSample.direction))
+
+            switch i {
+            case .hitLight(_, _, let radiance):
+                totalLight += calculateBRDFContribution(ray: ray, point: point, normal: normal, material: material, l: lightSample.direction, lightValue: radiance) / lightSample.pdf
+            case _:
+                totalLight += simd_float3(0, 0, 0) // ambient
+            }
+        }
+
+        for _ in 0..<brdfSamples {
             let u = randomFloat()
             let v = randomFloat()
             let l = getUniformlyDistributedLightVector(u: u, v: v, normal: normal)
@@ -86,8 +102,12 @@ class Scene {
             case _:
                 lightValue = simd_float3(0,0,0) // ambient
             }
+
+            // let hemispherePDF = 1 / (2 * Float.pi) // Uniform hemisphere sampling PDF
+            let cosTheta = max(0.0, dot(normal, l))
+            let pdf = cosTheta / Float.pi // Cosine-weighted hemisphere sampling PDF
             
-            totalLight += calculateBRDFContribution(ray: ray, point: point, normal: normal, material: material, l: l, lightValue: lightValue)
+            totalLight += calculateBRDFContribution(ray: ray, point: point, normal: normal, material: material, l: l, lightValue: lightValue) / max(pdf, 1e-6)
         }
             
         return totalLight
@@ -131,7 +151,7 @@ class Scene {
                     pixels[pixelOffset + 3] = 255 // A
             }
         }
-        savePixelArrayToImage(pixels: pixels, width: width, height: height, fileName: "/Users/rishflab/PBR/gradient.png")
+        savePixelArrayToImage(pixels: pixels, width: width, height: height, fileName: "gradient.png")
     }
 
 }
